@@ -1,36 +1,53 @@
 struct PidParameter{
 
 float kp{0.0F};
-float ki{0.0U};
-float kd{0.0U};
+float ki{0.0F};
+float kd{0.0F};
 
-float integrator{0.0U};
-float integrator_max{0.5U};
-float output_max{5.0U};
+
+float integrator{0.0F};
+float integrator_max{0.5F};
+float output_max{5.0F};
+float prev_error{0.0F};
 };
 
 class PID{
 
-PID(PidParameter): pid(PidParameter){}
+public:
 
-[[nodiscard]] float PidCalculate(PidParameter &param,float target,float current,float dt) noexcept {
+explicit PID(PidParameter& parameter): param(parameter){}
 
-static constexpr float INV_DT{1.0F/dt};
- float error = target-current;
- float current_error = error - prev_error;
- float propostion = param.ki*error;
+[[nodiscard]] float PidCalculate(float target,float current,float dt) noexcept {
 
- param.integrator+=param.ki*error*dt;
+//ZERO DIVISION CHECK 
+ const float safe_dt{std::max(dt,0.000001F)};
+ const float INV_DT{1.0F/safe_dt};
 
- std::clamp(param.integrator,-param.integrator_max,param.integrator_max);
 
- float derivative=param.kd*current_error*INV_DT;
- 
- float total = propostion+param.integrator+derivative;
- std::clamp(total,-param.output_max,param.output_max);
+//ERROR CALCULATE 
+ float error {target-current};
 
- float prev_error = error;
+
+ //PROPORTIONAL CALCULATE
+ float proportional {param.kp*error};
+
+ //INTEGRATOR CALCULATE WITH RANGE USING std::clamp
+ float next_integrator {std::fma(param.ki*error,safe_dt,param.integrator)};
+ param.integrator = std::clamp(next_integrator,-param.integrator_max,param.integrator_max); 
+
+ //DERIVATIVE CALCULATE 
+ float current_error{error - param.prev_error};
+ float derivative{param.kd*current_error*INV_DT};
+
+  //FINAL CALCULATE
+ float total {proportional+param.integrator+derivative};
+
+ //ERROR UPDATE
+  param.prev_error = error;
+
+ return std::clamp(total,-param.output_max,param.output_max);
 
 }
-
+ private:
+ PidParameter& param;
 };
