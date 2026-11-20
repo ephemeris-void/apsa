@@ -1,0 +1,220 @@
+/* ============================================================
+ * NUCLEO-H755ZI-Q — Zephyr Devicetree Overlay
+ * ============================================================
+ *   - SPI1 (PA5/PA6/PB5) — IMU (ICM-42688-P) CS=PD14
+ *   - USART6 (PC6/PC7)   — micro-ROS @ 115200 (FTDI)
+ *   - USART3 (PD8/PD9)   — Console/log/shell @ 115200 (ST-LINK VCP)
+ *   - USART1 (PB6/PB7)   — GPS @ 9600
+ *   - I2C1  (PB8/PB9)    — BARO (DPS310)
+ *   - I2C4  (PF14/PF15)  — MAG (QMC5883P)
+ *   - UART4 (PC10/PC11)  — LoRa @ 9600
+ *   - IWDG               — Watchdog
+ *
+ * NOTE: log backend uses zephyr,console (usart3) by default.
+ *       No zephyr,log-uart node → no custom binding → log goes
+ *       to usart3 only. usart6 is exclusively micro-ROS.
+ * ============================================================ */
+
+/ {
+    chosen {
+        zephyr,console    = &usart3;
+        zephyr,shell-uart = &usart3;
+    };
+
+    aliases {
+        uart-telemetry = &usart3;
+        uart-ros       = &usart6;
+        uart-console   = &usart3;
+        uart-gps       = &usart1;
+        uart-lora      = &uart4;
+        i2c-baro       = &i2c1;
+        i2c-compass    = &i2c4;
+        spi-imu        = &spi1;
+        watchdog0      = &iwdg;
+
+        led1 = &user_yellow_led;
+        led2 = &user_red_led;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+
+        user_yellow_led: led_user_1 {
+            gpios = <&gpioe 1 GPIO_ACTIVE_HIGH>;
+            label = "Yellow LD2";
+        };
+        user_red_led: led_user_2 {
+            gpios = <&gpiob 14 GPIO_ACTIVE_HIGH>;
+            label = "Red LD3";
+        };
+    };
+};
+
+/* ============================================================
+ * PINCTRL
+ * ============================================================ */
+&pinctrl {
+    spi1_sck_pa5: spi1_sck_pa5 {
+        pinmux = <STM32_PINMUX('A', 5, AF5)>;
+        bias-pull-down;
+        slew-rate = "very-high-speed";
+    };
+
+    spi1_miso_pa6: spi1_miso_pa6 {
+        pinmux = <STM32_PINMUX('A', 6, AF5)>;
+        bias-pull-up;
+        slew-rate = "very-high-speed";
+    };
+
+    spi1_mosi_pb5: spi1_mosi_pb5 {
+        pinmux = <STM32_PINMUX('B', 5, AF5)>;
+        bias-pull-down;
+        slew-rate = "very-high-speed";
+    };
+
+    usart6_tx_pc6: usart6_tx_pc6 {
+        pinmux = <STM32_PINMUX('C', 6, AF7)>;
+        bias-pull-up;
+    };
+
+    usart6_rx_pc7: usart6_rx_pc7 {
+        pinmux = <STM32_PINMUX('C', 7, AF7)>;
+        bias-pull-up;
+    };
+
+    usart3_tx_pd8: usart3_tx_pd8 {
+        pinmux = <STM32_PINMUX('D', 8, AF7)>;
+        bias-pull-up;
+    };
+
+    usart3_rx_pd9: usart3_rx_pd9 {
+        pinmux = <STM32_PINMUX('D', 9, AF7)>;
+        bias-pull-up;
+    };
+
+    usart1_tx_pb6: usart1_tx_pb6 {
+        pinmux = <STM32_PINMUX('B', 6, AF7)>;
+        bias-pull-up;
+    };
+    usart1_rx_pb7: usart1_rx_pb7 {
+        pinmux = <STM32_PINMUX('B', 7, AF7)>;
+        bias-pull-up;
+    };
+
+    i2c1_scl_pb8: i2c1_scl_pb8 {
+        pinmux = <STM32_PINMUX('B', 8, AF4)>;
+        bias-pull-up;
+        drive-open-drain;
+    };
+    i2c1_sda_pb9: i2c1_sda_pb9 {
+        pinmux = <STM32_PINMUX('B', 9, AF4)>;
+        bias-pull-up;
+        drive-open-drain;
+    };
+
+    i2c4_scl_pf14: i2c4_scl_pf14 {
+        pinmux = <STM32_PINMUX('F', 14, AF4)>;
+        bias-pull-up;
+        drive-open-drain;
+    };
+    i2c4_sda_pf15: i2c4_sda_pf15 {
+        pinmux = <STM32_PINMUX('F', 15, AF4)>;
+        bias-pull-up;
+        drive-open-drain;
+    };
+
+    uart4_tx_pc10: uart4_tx_pc10 {
+        pinmux = <STM32_PINMUX('C', 10, AF8)>;
+        bias-pull-up;
+    };
+    uart4_rx_pc11: uart4_rx_pc11 {
+        pinmux = <STM32_PINMUX('C', 11, AF8)>;
+        bias-pull-up;
+    };
+};
+
+/* ============================================================
+ * SPI1 — IMU (ICM-42688-P)
+ * ============================================================ */
+&spi1 {
+    status = "okay";
+    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pb5>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpiod 14 GPIO_ACTIVE_LOW>;
+    clock-frequency = <3750000>;
+};
+
+/* ============================================================
+ * USART6 — micro-ROS @ 115200 (PC6/PC7, FTDI)
+ * ============================================================ */
+&usart6 {
+    status = "okay";
+    pinctrl-0 = <&usart6_tx_pc6 &usart6_rx_pc7>;
+    pinctrl-names = "default";
+    current-speed = <115200>;
+};
+
+/* ============================================================
+ * USART3 — Console/log/shell @ 115200 (PD8/PD9, ST-LINK VCP)
+ * ============================================================ */
+&usart3 {
+    status = "okay";
+    pinctrl-0 = <&usart3_tx_pd8 &usart3_rx_pd9>;
+    pinctrl-names = "default";
+    current-speed = <115200>;
+};
+
+/* ============================================================
+ * USART1 — GPS @ 9600 (PB6/PB7)
+ * ============================================================ */
+&usart1 {
+    status = "okay";
+    pinctrl-0 = <&usart1_tx_pb6 &usart1_rx_pb7>;
+    pinctrl-names = "default";
+    current-speed = <9600>;
+};
+
+/* ============================================================
+ * I2C1 — BARO @ 100 kHz (PB8/PB9)
+ * ============================================================ */
+&i2c1 {
+    status = "okay";
+    pinctrl-0 = <&i2c1_scl_pb8 &i2c1_sda_pb9>;
+    pinctrl-names = "default";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+    scl-gpios = <&gpiob 8 (GPIO_OPEN_DRAIN | GPIO_PULL_UP)>;
+    sda-gpios = <&gpiob 9 (GPIO_OPEN_DRAIN | GPIO_PULL_UP)>;
+
+    dps310: dps310@77 {
+        compatible = "infineon,dps310";
+        reg = <0x77>;
+        status = "okay";
+    };
+};
+
+/* ============================================================
+ * I2C4 — MAG @ 100 kHz (PF14/PF15)
+ * ============================================================ */
+&i2c4 {
+    status = "okay";
+    pinctrl-0 = <&i2c4_scl_pf14 &i2c4_sda_pf15>;
+    pinctrl-names = "default";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+/* ============================================================
+ * UART4 — LoRa @ 9600 (PC10/PC11)
+ * ============================================================ */
+&uart4 {
+    status = "okay";
+    pinctrl-0 = <&uart4_tx_pc10 &uart4_rx_pc11>;
+    pinctrl-names = "default";
+    current-speed = <9600>;
+};
+
+/* ============================================================
+ * IWDG — Watchdog
+ * ============================================================ */
+&iwdg {
+    status = "okay";
+};

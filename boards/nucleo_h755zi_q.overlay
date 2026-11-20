@@ -1,0 +1,232 @@
+/* ============================================================
+ * NUCLEO-H755ZI-Q — Devicetree Overlay
+ * ============================================================
+ * Purpose:
+ *   - Pin mux for SPI1 (IMU), USART3 (Telemetry), USART2 (ROS)
+ *   - Fixed partitions for config, logs, calibration
+ *   - Watchdog alias
+ *   - LED aliases
+ *   - DMA channels
+ *
+ * Note: Base SoC dts already defines these peripherals; here we
+ *       only add board-specific pinctrl and aliases.
+ * ============================================================ */
+
+/ {
+    aliases {
+        /* UART */
+        uart-telemetry = &usart3;
+        uart-ros       = &usart2;
+
+        /* SPI */
+        spi-imu        = &spi1;
+
+        /* Watchdog */
+        watchdog0      = &iwdg;
+
+        /* LEDs (Nucleo-H755ZI-Q) */
+        led-status     = &green_led;
+        led-error      = &red_led;
+
+        /* DMA */
+        dma-1          = &dma1;
+    };
+
+    /* ---------- LEDs ---------- */
+    leds {
+        compatible = "gpio-leds";
+
+        green_led: led_0 {
+            gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
+            label = "Green LED";
+        };
+
+        yellow_led: led_1 {
+            gpios = <&gpioe 1 GPIO_ACTIVE_HIGH>;
+            label = "Yellow LED";
+        };
+
+        red_led: led_2 {
+            gpios = <&gpiob 14 GPIO_ACTIVE_HIGH>;
+            label = "Red LED";
+        };
+    };
+
+    /* ---------- IMU CS Pin ---------- */
+    imu_cs: imu-cs {
+        compatible = "gpio-leds";
+        gpios = <&gpiod 14 GPIO_ACTIVE_LOW>;
+        label = "IMU Chip Select";
+    };
+};
+
+/* ============================================================
+ * SPI1 — IMU (ICM-42688-P)
+ * ============================================================
+ * Pins:
+ *   PA5 = SPI1_SCK
+ *   PA6 = SPI1_MISO
+ *   PB5 = SPI1_MOSI
+ *   PD14 = CS (software-controlled)
+ * ============================================================ */
+&spi1 {
+    status = "okay";
+    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pb5>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpiod 14 GPIO_ACTIVE_LOW>;
+
+    clock-frequency = <3750000>;   /* 3.75 MHz */
+};
+
+&pinctrl {
+    spi1_sck_pa5: spi1_sck_pa5 {
+        pinmux = <STM32_PINMUX('A', 5, AF5)>;
+        bias-pull-down;
+        slew-rate = "very-high-speed";
+    };
+
+    spi1_miso_pa6: spi1_miso_pa6 {
+        pinmux = <STM32_PINMUX('A', 6, AF5)>;
+        bias-pull-down;
+        slew-rate = "very-high-speed";
+    };
+
+    spi1_mosi_pb5: spi1_mosi_pb5 {
+        pinmux = <STM32_PINMUX('B', 5, AF5)>;
+        bias-pull-down;
+        slew-rate = "very-high-speed";
+    };
+};
+
+/* ============================================================
+ * USART3 — Telemetry (921600 baud)
+ * ============================================================
+ * Pins:
+ *   PD8 = USART3_TX
+ *   PD9 = USART3_RX
+ * ============================================================ */
+&usart3 {
+    status = "okay";
+    current-speed = <921600>;
+    pinctrl-0 = <&usart3_tx_pd8 &usart3_rx_pd9>;
+    pinctrl-names = "default";
+};
+
+&pinctrl {
+    usart3_tx_pd8: usart3_tx_pd8 {
+        pinmux = <STM32_PINMUX('D', 8, AF7)>;
+        bias-pull-up;
+    };
+
+    usart3_rx_pd9: usart3_rx_pd9 {
+        pinmux = <STM32_PINMUX('D', 9, AF7)>;
+        bias-pull-up;
+    };
+};
+
+/* ============================================================
+ * USART2 — micro-ROS Agent (115200 baud)
+ * ============================================================
+ * Pins:
+ *   PA2 = USART2_TX
+ *   PA3 = USART2_RX
+ *
+ * Note: NUCLEO-H755ZI-Q exposes USART2 on ST-Link VCP.
+ * ============================================================ */
+&usart2 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3>;
+    pinctrl-names = "default";
+};
+
+&pinctrl {
+    usart2_tx_pa2: usart2_tx_pa2 {
+        pinmux = <STM32_PINMUX('A', 2, AF7)>;
+        bias-pull-up;
+    };
+
+    usart2_rx_pa3: usart2_rx_pa3 {
+        pinmux = <STM32_PINMUX('A', 3, AF7)>;
+        bias-pull-up;
+    };
+};
+
+/* ============================================================
+ * DMA1 — for SPI1 and USART3
+ * ============================================================ */
+&dma1 {
+    status = "okay";
+};
+
+/* ============================================================
+ * IWDG — Independent Watchdog
+ * ============================================================ */
+&iwdg {
+    status = "okay";
+};
+
+/* ============================================================
+ * Fixed Partitions — Flash Layout
+ * ============================================================
+ * STM32H755ZI-Q Flash: 2 MB (0x08000000 – 0x081FFFFF)
+ *
+ * Layout (2 MB split):
+ *   0x08000000 - 0x080FFFFF : MCU firmware (1 MB)
+ *   0x08100000 - 0x0811FFFF : config storage (128 KB)
+ *   0x08120000 - 0x0813FFFF : logs storage (128 KB)
+ *   0x08140000 - 0x0815FFFF : calib storage (128 KB)
+ * ============================================================ */
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /* Firmware — reserved by linker; not touched here */
+        boot_partition: partition@0 {
+            label = "mcuboot";
+            reg = <0x00000000 DT_SIZE_K(1024)>;
+            read-only;
+        };
+
+        /* Config storage (128 KB) */
+        config_storage: partition@100000 {
+            label = "config_storage";
+            reg = <0x00100000 DT_SIZE_K(128)>;
+        };
+
+        /* Logs storage (128 KB) */
+        logs_storage: partition@120000 {
+            label = "logs_storage";
+            reg = <0x00120000 DT_SIZE_K(128)>;
+        };
+
+        /* Calibration storage (128 KB) */
+        calib_storage: partition@140000 {
+            label = "calib_storage";
+            reg = <0x00140000 DT_SIZE_K(128)>;
+        };
+    };
+};
+
+/* ============================================================
+ * CM4 Core — Enable for dual-core operation
+ * ============================================================ */
+&m4 {
+    status = "okay";
+};
+
+/* ============================================================
+ * HSEM — Hardware Semaphores for CM7 ↔ CM4
+ * ============================================================ */
+&hsem {
+    status = "okay";
+};
+
+/* ============================================================
+ * RTC / Backup RAM — Retention section
+ * ============================================================ */
+&rtc {
+    status = "okay";
+};

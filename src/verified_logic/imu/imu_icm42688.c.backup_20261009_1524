@@ -1,0 +1,318 @@
+#include "imu_icm42688.h"
+#include "../agent/interfaces/agent_imu_if.h"
+#include "../agent/core/agent_context.h"
+#include "../agent/core/agent_config.h"
+#include "../agent/trace/agent_log.h"
+
+/* Zephyr HAL abstraction */
+#include "hal/hal_spi.h"
+#include "hal/hal_gpio.h"
+#include "hal/hal_uart.h"
+#include "hal/hal_time.h"
+
+#include <stdio.h>
+
+/* ============================================================
+ * ICM-42688-P IMU DRIVER — IMPLEMENTATION
+ * ============================================================
+ * Board:  NUCLEO-H755ZI-Q
+ * Bus:    SPI1 @ 3.75 MHz
+ * Pins:   PA5=SCK, PA6=MISO, PB5=MOSI, PD14=CS
+ * ODR:    1 kHz
+ * Range:  ±16g, ±2000 dps
+ * WCET:   50 µs per sample
+ * ============================================================ */
+
+/* ---------- Debug globals (defined in main.c) ---------- */
+extern int16_t dbg_ax;
+extern int16_t dbg_ay;
+extern int16_t dbg_az;
+extern int16_t dbg_gx;
+extern int16_t dbg_gy;
+extern int16_t dbg_gz;
+
+static bool            g_icm_initialized = false;
+static agent_health_t  g_icm_health      = AGENT_HEALTH_UNKNOWN;
+static uint32_t        g_icm_fail_count  = 0U;
+static uint32_t        g_icm_ok_count    = 0U;
+
+/* ---------- CS Control (via HAL GPIO) ---------- */
+#define CS_LOW()   (void)hal_gpio_set(HAL_GPIO_IMU_CS, false)
+#define CS_HIGH()  (void)hal_gpio_set(HAL_GPIO_IMU_CS, true)
+
+/* ---------- SPI Transfer (single byte via HAL) ---------- */
+AGENT_INLINE_FAST uint8_t spi_xfer(uint8_t data)
+{
+    uint8_t rx = 0;
+    (void)hal_spi_transceive(HAL_SPI_BUS_IMU, &data, &rx, 1, 1000U);
+    return rx;
+}
+
+/* ---------- Low-Level Register Access ---------- */
+uint8_t icm_read_reg(uint8_t reg)
+{
+    uint8_t val = 0;
+    CS_LOW();
+    (void)hal_spi_reg_read(HAL_SPI_BUS_IMU, reg, &val, 1000U);
+    CS_HIGH();
+    return val;
+}
+
+void icm_write_reg(uint8_t reg, uint8_t val)
+{
+    CS_LOW();
+    (void)hal_spi_reg_write(HAL_SPI_BUS_IMU, reg, val, 1000U);
+    CS_HIGH();
+}
+
+/* ---------- INIT ---------- */
+agent_status_t icm_init(void)
+{
+    char buf[128];
+    int len;
+
+    if (g_icm_initialized) {
+        g_icm_health = AGENT_HEALTH_OK;
+        return AGENT_OK;
+    }
+
+    /* ---------- STEP 1: WHO_AM_I check ---------- */
+        uint8_t who = icm_read_reg(ICM_REG_WHO_AM_I);
+
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] WHO_AM_I = 0x%02X (expect 0x47)\r\n", who);
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+    if (who != ICM_WHO_AM_I_VALUE) {
+        len = snprintf(buf, sizeof(buf), "[ICM_INIT] WHO_AM_I FAIL — aborting\r\n");
+        (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+        agent_log_event(AGENT_LOG_IMU_FAIL, who, 0U);
+        g_icm_health = AGENT_HEALTH_FAIL;
+        return AGENT_ERR_HW;
+    }
+
+    /* ---------- STEP 2: Power Management ---------- */
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] S2: writing PWR_MGMT0...\r\n");
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    icm_write_reg(ICM_REG_PWR_MGMT0, ICM_PWR_MGMT0_LN);
+
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] S2: written, now sleep 50ms...\r\n");
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+        k_busy_wait(50000);   /* 50 ms */
+
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] S2: sleep done\r\n");
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    uint8_t pwr_check = icm_read_reg(ICM_REG_PWR_MGMT0);
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] PWR_MGMT0 wrote=0x%02X read=0x%02X\r\n",
+                   ICM_PWR_MGMT0_LN, pwr_check);
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    /* ---------- STEP 3: ACCEL Config ---------- */
+    icm_write_reg(ICM_REG_ACCEL_CONFIG0, ICM_ODR_1KHZ);
+       k_busy_wait(10000);   /* 10 ms */
+
+    uint8_t acc_check = icm_read_reg(ICM_REG_ACCEL_CONFIG0);
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] ACCEL_CFG0 wrote=0x%02X read=0x%02X\r\n",
+                   ICM_ODR_1KHZ, acc_check);
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    /* ---------- STEP 4: GYRO Config ---------- */
+    icm_write_reg(ICM_REG_GYRO_CONFIG0, ICM_ODR_1KHZ);
+        k_busy_wait(10000);   /* 10 ms */
+
+    uint8_t gyr_check = icm_read_reg(ICM_REG_GYRO_CONFIG0);
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] GYRO_CFG0 wrote=0x%02X read=0x%02X\r\n",
+                   ICM_ODR_1KHZ, gyr_check);
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    /* ---------- STEP 5: First sample read (test) ---------- */
+       k_busy_wait(10000);   /* 10 ms */
+
+    uint8_t test_ax_h = icm_read_reg(0x1F);
+    uint8_t test_ax_l = icm_read_reg(0x20);
+    uint8_t test_ay_h = icm_read_reg(0x21);
+    uint8_t test_ay_l = icm_read_reg(0x22);
+    uint8_t test_az_h = icm_read_reg(0x23);
+    uint8_t test_az_l = icm_read_reg(0x24);
+
+    int16_t test_ax = (int16_t)(((uint16_t)test_ax_h << 8) | test_ax_l);
+    int16_t test_ay = (int16_t)(((uint16_t)test_ay_h << 8) | test_ay_l);
+    int16_t test_az = (int16_t)(((uint16_t)test_az_h << 8) | test_az_l);
+
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] First sample: ax=%d ay=%d az=%d\r\n",
+                   test_ax, test_ay, test_az);
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    /* ---------- STEP 6: Mark initialized ---------- */
+    g_icm_initialized = true;
+    g_icm_health      = AGENT_HEALTH_OK;
+    g_icm_ok_count    = 0U;
+    g_icm_fail_count  = 0U;
+
+    len = snprintf(buf, sizeof(buf), "[ICM_INIT] Initialization COMPLETE\r\n");
+    (void)hal_uart_write(HAL_UART_TELEMETRY, (const uint8_t *)buf, (size_t)len, 100U);
+
+    return AGENT_OK;
+}
+
+/* ---------- READ SAMPLE ---------- */
+agent_status_t icm_read_sample(agent_sensor_sample_t *sample)
+{
+    if (!g_icm_initialized) {
+        if (sample != NULL) {
+            sample->ax = 0;
+            sample->ay = 0;
+            sample->az = 0;
+            sample->gx = 0;
+            sample->gy = 0;
+            sample->gz = 0;
+            sample->timestamp_us = agent_time_now_us();
+            sample->health = AGENT_HEALTH_FAIL;
+        }
+        return AGENT_ERR_NOT_INIT;
+    }
+
+    /* Burst read: 14 data bytes (register auto-increments) */
+    uint8_t buf[14] = {0};
+
+    CS_LOW();
+    (void)hal_spi_burst_read(HAL_SPI_BUS_IMU, ICM_REG_ACCEL_DATA_X1, buf, 14, 1000U);
+    CS_HIGH();
+
+    if (sample == NULL) {
+        return AGENT_OK;
+    }
+
+    sample->ax = (int16_t)(((uint16_t)buf[0]  << 8) | buf[1]);
+    sample->ay = (int16_t)(((uint16_t)buf[2]  << 8) | buf[3]);
+    sample->az = (int16_t)(((uint16_t)buf[4]  << 8) | buf[5]);
+    sample->gx = (int16_t)(((uint16_t)buf[6]  << 8) | buf[7]);
+    sample->gy = (int16_t)(((uint16_t)buf[8]  << 8) | buf[9]);
+    sample->gz = (int16_t)(((uint16_t)buf[10] << 8) | buf[11]);
+    sample->timestamp_us = agent_time_now_us();
+    sample->health       = AGENT_HEALTH_OK;
+
+    /* ---------- Update debug globals for main.c display ---------- */
+    dbg_ax = sample->ax;
+    dbg_ay = sample->ay;
+    dbg_az = sample->az;
+    dbg_gx = sample->gx;
+    dbg_gy = sample->gy;
+    dbg_gz = sample->gz;
+
+    /* ---------- Runtime IMU failure detection ----------
+     * Check 1: Sentinel value (-1) — SPI communication failure
+     */
+    if (sample->ax == -1 && sample->ay == -1 && sample->az == -1 &&
+        sample->gx == -1 && sample->gy == -1 && sample->gz == -1) {
+
+        g_icm_health = AGENT_HEALTH_FAIL;
+        g_icm_fail_count++;
+        g_icm_ok_count = 0U;
+        agent_health_set_imu(AGENT_HEALTH_FAIL);
+        agent_log_event(AGENT_LOG_IMU_FAIL, g_icm_fail_count, 0U);
+        return AGENT_ERR_HW;
+    }
+
+    /* Check 2: Range validation — Accel (soft fail → DEGRADED) */
+    if (sample->ax < -32000 || sample->ax > 32000 ||
+        sample->ay < -32000 || sample->ay > 32000 ||
+        sample->az < -32000 || sample->az > 32000) {
+
+        g_icm_health = AGENT_HEALTH_DEGRADED;
+        g_icm_fail_count++;
+        g_icm_ok_count = 0U;
+        return AGENT_ERR;
+    }
+
+    /* Check 3: Gyro Range Validation */
+    if (sample->gx < -32768 || sample->gx > 32767 ||
+        sample->gy < -32768 || sample->gy > 32767 ||
+        sample->gz < -32768 || sample->gz > 32767) {
+
+        g_icm_health = AGENT_HEALTH_DEGRADED;
+        g_icm_fail_count++;
+        g_icm_ok_count = 0U;
+        return AGENT_ERR;
+    }
+
+    /* Check 4: All-zero pattern (hard fail → VIRTUALIZE) */
+    if (sample->ax == 0 && sample->ay == 0 && sample->az == 0 &&
+        sample->gx == 0 && sample->gy == 0 && sample->gz == 0) {
+
+        g_icm_health = AGENT_HEALTH_FAIL;
+        g_icm_fail_count++;
+        g_icm_ok_count = 0U;
+        agent_health_set_imu(AGENT_HEALTH_FAIL);
+        agent_log_event(AGENT_LOG_IMU_FAIL, g_icm_fail_count, 0U);
+        return AGENT_ERR_HW;
+    }
+
+    /* ---------- RUNTIME RECOVERY ---------- */
+    if (g_icm_health != AGENT_HEALTH_OK) {
+        g_icm_ok_count++;
+
+        if (g_icm_ok_count >= 10U) {
+            g_icm_health     = AGENT_HEALTH_OK;
+            g_icm_ok_count   = 0U;
+            g_icm_fail_count = 0U;
+            agent_health_set_imu(AGENT_HEALTH_OK);
+            agent_log_event(AGENT_LOG_SENSOR_RECOVERED, 0U, 0U);
+        }
+    } else {
+        g_icm_ok_count = 0U;
+    }
+
+    return AGENT_OK;
+}
+
+/* ---------- HEALTH ---------- */
+agent_health_t icm_health(void)
+{
+    return g_icm_health;
+}
+
+/* ---------- FAILURE INJECTION ---------- */
+void icm_on_failure(void)
+{
+    g_icm_health     = AGENT_HEALTH_FAIL;
+    g_icm_fail_count++;
+    g_icm_ok_count   = 0U;
+    agent_health_set_imu(AGENT_HEALTH_FAIL);
+    agent_log_event(AGENT_LOG_IMU_FAIL, g_icm_fail_count, 0U);
+}
+
+/* ============================================================
+ * INTERFACE GLUE (agent_imu_if.h)
+ * ============================================================ */
+
+agent_status_t imu_init(void)
+{
+    return icm_init();
+}
+
+agent_status_t imu_get_sample(agent_sensor_sample_t *sample)
+{
+    return icm_read_sample(sample);
+}
+
+agent_health_t imu_health(void)
+{
+    return icm_health();
+}
+
+void imu_on_failure(void)
+{
+    icm_on_failure();
+}
+
+/* ---------- FORCE HEALTH OK ---------- */
+void icm_set_health_ok(void)
+{
+    g_icm_initialized = true;
+    g_icm_health      = AGENT_HEALTH_OK;
+    g_icm_ok_count    = 0U;
+    g_icm_fail_count  = 0U;
+    agent_health_set_imu(AGENT_HEALTH_OK);
+}
