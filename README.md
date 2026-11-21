@@ -11,7 +11,7 @@
 
 In a drone, if the IMU fails mid-flight, the flight controller loses all attitude and motion data. The drone crashes.
 
-The standard solution is hardware redundancy - a second physical IMU. APSA takes a different approach: when the IMU fails, a CNN autoencoder reconstructs IMU output from the last 512 samples in its history buffer and feeds it into the sensor pipeline as if the IMU were still running. This keeps the drone flying for up to 3 minutes while attempting recovery.
+The standard solution is hardware redundancy - a second physical IMU. APSA adds a software fallback: when the IMU fails, a CNN autoencoder reconstructs IMU output from the last 512 samples in its history buffer and feeds it into the sensor pipeline as if the IMU were still running. This keeps the drone flying for up to 3 minutes while attempting recovery.
 
 The key constraint: the AI output is not trusted blindly. Every reconstructed sample is checked against physics constraints before entering the sensor queue. Outputs that are all-zero, saturated, or whose acceleration magnitude falls outside the physically valid range are rejected and treated as a sensor failure. If the AI itself fails, the drone lands immediately. If 3 minutes pass without IMU recovery, the drone also lands safely.
 
