@@ -1,0 +1,6 @@
+west:
+  command: /home/spider/zephyr_microros_venv/bin/west build -p always -b nucleo_h755zi_q/stm32h755xx/m7
+    -s /home/spider/complete_clean_zyphr_micro_ros_lora_sensor_backup_final_clean/extracted/zephyr_project
+    -d /home/spider/complete_clean_zyphr_micro_ros_lora_sensor_backup_final_clean/extracted/zephyr_project/build
+  topdir: /home/spider/zephyrproject
+  version: 1.5.0
