@@ -238,3 +238,9 @@ to confirm before connecting.
 # Always check first:
 ls /dev/ttyACM* /dev/ttyUSB*
 ```
+## STM32CubeIDE Implementation
+
+The `stm-cube/` folder contains a separate STM32CubeIDE-based implementation of the same system. Same hardware, same AI virtual sensor logic, different firmware stack. The Zephyr version (this folder) was built first. The STM32CubeIDE version runs X-CUBE-AI natively on the CM4 core with the CM7 handling all sensor, EKF, and control logic without an RTOS layer.
+
+See [stm-cube/README.md](stm-cube/README.md) for build and flash instructions.
+EOF
