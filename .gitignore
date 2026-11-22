@@ -1,1 +1,23 @@
+# Build output
+Debug/
+Release/
+*.o
+*.d
+*.map
+*.su
+*.lst
+
+# IDE metadata
+.metadata/
+*.bak
+*.bak2
+*BEFORE_*
+*.backup
+
+# Archives
+*.tar.gz
+*.zip
+
+# Zephyr build
 build/
+micro_ros_zephyr_module/
