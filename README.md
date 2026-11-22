@@ -185,3 +185,11 @@ ros2 topic echo /drone/health --once
 /dev/ttyACM1 : ST-LINK VCP   STM32 USART3  serial log
 /dev/ttyUSB0 : FTDI adapter  STM32 USART6  micro-ROS
 /dev/ttyACM0 : ESP32 USB
+
+---
+
+## Simulink Model
+
+![APSA Model](Simulink_Model/APSA.png)
+
+📥 [Download .slx file](Simulink_Model/APSA.slx)
